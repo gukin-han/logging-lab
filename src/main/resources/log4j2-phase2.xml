@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Phase 2: 동기(Sync) + 텍스트(PatternLayout) + jdbc.resultset ON -->
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Logger name="jdbc.resultset" level="debug" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Logger name="jdbc.sqltiming" level="info" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Logger name="jdbc.sqlonly" level="off" additivity="false"/>
+        <Logger name="jdbc.audit" level="off" additivity="false"/>
+        <Logger name="jdbc.connection" level="off" additivity="false"/>
+        <Logger name="jdbc.resultsettable" level="off" additivity="false"/>
+        <Root level="info">
+            <AppenderRef ref="Console"/>
+        </Root>
+    </Loggers>
+</Configuration>

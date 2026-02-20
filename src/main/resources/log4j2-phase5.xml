@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Phase 5: 비동기(Async) + JSON(JsonTemplateLayout) + jdbc.resultset OFF -->
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <JsonTemplateLayout eventTemplateUri="classpath:EcsLayout.json"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <AsyncLogger name="jdbc" level="off" additivity="false"/>
+        <AsyncRoot level="info">
+            <AppenderRef ref="Console"/>
+        </AsyncRoot>
+    </Loggers>
+</Configuration>

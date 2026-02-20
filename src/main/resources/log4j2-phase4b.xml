@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Phase 4b: 비동기(Async) + JSON(JsonTemplateLayout) + jdbc.sqltiming ON (로그량 중간) -->
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <JsonTemplateLayout eventTemplateUri="classpath:EcsLayout.json"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <AsyncLogger name="jdbc.sqltiming" level="debug" additivity="false">
+            <AppenderRef ref="Console"/>
+        </AsyncLogger>
+        <AsyncLogger name="jdbc.resultset" level="off" additivity="false"/>
+        <AsyncLogger name="jdbc.sqlonly" level="off" additivity="false"/>
+        <AsyncLogger name="jdbc.audit" level="off" additivity="false"/>
+        <AsyncLogger name="jdbc.connection" level="off" additivity="false"/>
+        <AsyncLogger name="jdbc.resultsettable" level="off" additivity="false"/>
+        <AsyncRoot level="info">
+            <AppenderRef ref="Console"/>
+        </AsyncRoot>
+    </Loggers>
+</Configuration>
