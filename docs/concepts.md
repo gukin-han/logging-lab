@@ -21,7 +21,7 @@ public void println(String x) {
 ### 구조
 
 - `synchronized (this)` — `this`는 `System.out` 싱글턴 객체
-- Tomcat 워커 스레드 200개가 하나의 lock을 놓고 경합
+- Tomcat 워커 스레드들이 하나의 lock을 놓고 경합 (이 실험에서는 ~120개 스레드가 활성화됨)
 - lock을 획득한 스레드만 쓰기 가능, 나머지는 BLOCKED 상태로 대기
 - Log4j2가 아닌 Java 표준 라이브러리(PrintStream)의 설계에 의한 동작
 
@@ -56,7 +56,7 @@ Log4j2의 `AsyncLogger`는 내부적으로 LMAX Disruptor 라이브러리를 사
 |---|---|---|
 | 동기화 방식 | lock (`ReentrantLock`) | lock-free (CAS 연산) |
 | 메모리 할당 | enqueue마다 객체 생성 가능 | 슬롯을 미리 할당, 재사용 |
-| 캐시 친화성 | 낮음 (linked 구조) | 높음 (연속 메모리 배치) |
+| 캐시 친화성 | 배열 기반이지만 lock으로 인한 context switching 발생 | cache line padding으로 false sharing 방지 |
 | 처리량 | 수십만/초 | 수백만~수천만/초 |
 
 CAS(Compare-And-Swap)는 CPU 레벨의 원자적 연산으로, lock 없이 동시성을 보장한다.

@@ -44,7 +44,7 @@ flowchart LR
 `System.out`은 `PrintStream`의 `synchronized` 블록으로 보호된다:
 
 - `PrintStream.println()`의 `synchronized (this)` — `this`는 System.out 싱글턴
-- 200개 Tomcat 스레드가 하나의 lock을 놓고 경합
+- Tomcat 워커 스레드들이 하나의 lock을 놓고 경합 (이 실험에서는 ~120개 스레드가 활성화됨)
 - 1 요청 = ~2,500줄 → 쓰기 완료까지 수백ms 블로킹
 
 TPS 14.6 (Baseline 대비 0.59%)
