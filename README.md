@@ -31,8 +31,9 @@ CloudWatch는 수집된 로그 GB당 과금되므로, 불필요한 로그가 비
 | DB | H2 In-Memory | DB I/O 변수 제거 |
 | Logging | Log4j2 + log4jdbc | |
 | Async | LMAX Disruptor 4.0.0 | Log4j2 AsyncLogger용 |
-| Load Test | k6 | 100 VUser, 1분 |
+| Load Test | k6 | 100 VUser, 30초~1분 |
 | Profiling | VisualVM | CPU, Heap, GC |
+| Thread Dump | jstack (JDK 내장) | 부하 중 스레드 상태·lock 경합 분석 |
 
 ---
 
@@ -136,17 +137,18 @@ flowchart LR
     Client["k6 · 100 VUser"] -->|"요청"| T["Tomcat 워커 스레드 ⏸"]
     T -->|"~2,500 lines/req"| PL["PatternLayout"]
     PL --> CA["Console Appender"]
-    CA --> SOUT["System.out 🔒"]
+    CA --> OSM["OutputStreamManager 🔒"]
+    OSM --> SOUT["System.out"]
     SOUT --> BUF["Buffer · 8KB"]
     BUF --> FD["stdout fd=1"]
     FD -.->|"완료 후 리턴"| T
 
     style T fill:#F44336,color:#fff
-    style SOUT fill:#FF9800,color:#fff
+    style OSM fill:#FF9800,color:#fff
     style Client fill:#2196F3,color:#fff
 ```
 
-TPS 14.6 (Baseline 대비 0.59%). `PrintStream.println()`의 `synchronized` 블록으로 인해, Tomcat 워커 스레드들이 하나의 lock에서 경합하며 쓰기 완료까지 블로킹됨.
+TPS 14.6 (Baseline 대비 0.59%). Log4j2 `OutputStreamManager`의 `synchronized` 블록에서 Tomcat 워커 스레드들이 하나의 lock을 놓고 경합하며, 쓰기 완료까지 블로킹됨. 스레드 덤프로 확인한 lock 경합 지점은 `OutputStreamManager.writeBytes()`와 `OutputStreamManager.flush()`다.
 
 ### Phase 4: 비동기(Async) + Console
 
@@ -246,7 +248,88 @@ CPU 70~80%, GC activity 0.0%. Phase 2보다 CPU 사용률이 약 20% 높은데, 
 
 ### 관찰된 병목
 
-이 실험 조건에서 TPS를 떨어뜨린 것은 GC가 아니라 콘솔 출력(System.out)의 동기 I/O 블로킹이었다. 모든 Phase에서 GC 활동은 미미했고, 힙 톱니(sawtooth) 패턴도 관찰되지 않았다.
+VisualVM만으로는 병목의 정확한 위치를 특정할 수 없었다. GC가 원인이 아니라는 것은 확인되었으나, 실제로 스레드가 어디서 블로킹되는지는 VisualVM의 CPU/Heap 모니터링으로는 보이지 않았다. 이 한계를 해소하기 위해 스레드 덤프 분석을 추가로 수행했다.
+
+---
+
+## 스레드 덤프 분석
+
+### 목적
+
+VisualVM 프로파일링에서 GC가 병목이 아님을 확인한 뒤, 실제 스레드가 어디서 블로킹되는지 특정하기 위해 `jstack`으로 스레드 덤프를 수집했다.
+
+### 방법
+
+Phase 2(Sync + jdbc.resultset ON)와 Phase 5(Async + jdbc OFF)에서 각각 k6 부하(100 VUser, 30초)를 건 상태에서, 부하 시작 10초 후 `jstack`으로 스레드 덤프를 캡처했다.
+
+```bash
+# 앱 실행
+./gradlew bootRun --args='--spring.profiles.active=phase2 --server.port=8081'
+
+# 별도 터미널에서 k6 부하
+k6 run k6/load-test.js
+
+# 부하 중 스레드 덤프 캡처
+jstack <PID> > docs/thread-dump-phase2.txt
+```
+
+### 결과
+
+#### 스레드 상태 비교
+
+| | Phase 2 (Sync + jdbc ON) | Phase 5 (Async + jdbc OFF) |
+|---|---|---|
+| TPS | 13.3 | 2,653 |
+| BLOCKED | **7** | **0** |
+| RUNNABLE | 15 | 31 |
+| WAITING / TIMED_WAITING | 97 | 90 |
+
+#### Phase 2: lock 경합 상세
+
+BLOCKED 상태의 7개 스레드는 전부 Tomcat 워커 스레드(`http-nio-exec-*`)이며, 동일한 `OutputStreamManager` 인스턴스 하나를 대상으로 lock 경합이 발생했다.
+
+```
+"http-nio-8081-exec-92" #133 daemon prio=5
+   java.lang.Thread.State: BLOCKED (on object monitor)
+	at o.a.l.l.c.appender.OutputStreamManager.writeBytes(OutputStreamManager.java:365)
+	- waiting to lock <0x00000007ffd6ced8> (a o.a.l.l.c.appender.OutputStreamManager)
+	at o.a.l.l.c.layout.TextEncoderHelper.writeEncodedText(TextEncoderHelper.java:101)
+	at o.a.l.l.c.layout.PatternLayout.encode(PatternLayout.java:239)
+	at o.a.l.l.c.appender.AbstractOutputStreamAppender.directEncodeEvent(...)
+	at o.a.l.l.c.appender.AbstractOutputStreamAppender.tryAppend(...)
+	...
+	at net.sf.log4jdbc.log.slf4j.Slf4jSpyLogDelegator.methodReturned(...)
+```
+
+lock을 잡고 있는 스레드 1개는 같은 `OutputStreamManager`에서 `flushBuffer()` → `flush()`를 수행 중이었다.
+
+```
+- locked <0x00000007ffd6ced8> (a o.a.l.l.c.appender.OutputStreamManager)
+  at o.a.l.l.c.appender.OutputStreamManager.flushBuffer(OutputStreamManager.java:296)
+- locked <0x00000007ffd6ced8> (a o.a.l.l.c.appender.OutputStreamManager)
+  at o.a.l.l.c.appender.OutputStreamManager.flush(OutputStreamManager.java:307)
+```
+
+콜 체인 정리:
+
+```
+Tomcat 워커 스레드
+  → log4jdbc (Slf4jSpyLogDelegator.methodReturned)
+    → SLF4J → Log4j2 Logger.log()
+      → AppenderControl.callAppender()
+        → AbstractOutputStreamAppender.tryAppend()
+          → OutputStreamManager.writeBytes()  ← 🔒 lock 경합 지점 1
+          → OutputStreamManager.flush()       ← 🔒 lock 경합 지점 2
+            → System.out (stdout fd=1)
+```
+
+#### Phase 5: lock 경합 없음
+
+BLOCKED 스레드 0개. Tomcat 워커 스레드 대부분이 RUNNABLE 상태로 요청 처리에 집중하고 있었다.
+
+### 정정 사항
+
+초기 분석에서는 `System.out`(`PrintStream`)의 `synchronized` 블록을 병목 지점으로 기술했으나, 스레드 덤프 확인 결과 실제 첫 번째 lock 경합 지점은 Log4j2의 `OutputStreamManager`였다. `System.out`의 `synchronized`도 그 아래에서 관여하지만, 스레드가 BLOCKED 상태로 잡히는 지점은 `OutputStreamManager.writeBytes()`와 `OutputStreamManager.flush()`다.
 
 ---
 
@@ -263,7 +346,7 @@ CPU 70~80%, GC activity 0.0%. Phase 2보다 CPU 사용률이 약 20% 높은데, 
 
 1. **로그량에 따라 TPS 영향이 크게 달라졌다.** jdbc.resultset(2,500줄/req)에서는 TPS가 99.4% 감소했고, jdbc.sqltiming(1~2줄/req)에서는 21% 감소했다.
 
-2. **이 실험에서 GC는 병목이 아니었다.** VisualVM 프로파일링 결과, GC 활동은 모든 Phase에서 미미했다. TPS가 낮아 객체 생성률 자체가 GC를 유발할 수준에 도달하지 못했다. `System.out`의 `synchronized` 블록에서 스레드가 블로킹되는 것이 주된 성능 저하 요인이었다.
+2. **이 실험에서 GC는 병목이 아니었다.** VisualVM 프로파일링 결과, GC 활동은 모든 Phase에서 미미했다. TPS가 낮아 객체 생성률 자체가 GC를 유발할 수준에 도달하지 못했다. 스레드 덤프 분석 결과, Log4j2 `OutputStreamManager`의 `synchronized` 블록에서 Tomcat 워커 스레드들이 lock 경합으로 BLOCKED되는 것이 주된 성능 저하 요인이었다.
 
 3. **로그량이 극단적인 조건에서는 Sync/Async, Text/JSON 간 차이가 작았다.** Phase 2~4 모두 TPS 13~18 범위에 머물렀다. 반대로 로그량이 적정한 2차 실험(jdbc.sqltiming)에서도 세 설정 간 차이는 오차 범위였다.
 
@@ -280,6 +363,8 @@ logging-lab/
 │   ├── experiment-results.md     # 상세 실험 결과
 │   ├── data-flow.md              # 데이터 플로우 다이어그램
 │   ├── concepts.md               # 핵심 개념 정리
+│   ├── thread-dump-phase2.txt    # Phase 2 스레드 덤프 (k6 부하 중 캡처)
+│   ├── thread-dump-phase5.txt    # Phase 5 스레드 덤프 (k6 부하 중 캡처)
 │   └── images/                   # VisualVM 스크린샷
 │       ├── visualvm-phase2.png
 │       ├── visualvm-phase4.png
