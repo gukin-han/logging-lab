@@ -50,9 +50,9 @@ CloudWatch는 수집된 로그 GB당 과금되므로, 불필요한 로그가 비
 | Phase | Appender | 포맷 | jdbc.resultset | 요청당 로그량 |
 |-------|----------|------|----------------|-------------|
 | 1 | - (OFF) | - | OFF | 0줄 |
-| 2 | Sync Console | Text (PatternLayout) | ON | ~2,500줄 |
-| 3 | Sync Console | JSON (JsonTemplateLayout) | ON | ~2,500줄 |
-| 4 | Async (Disruptor) | JSON | ON | ~2,500줄 |
+| 2 | Sync Console | Text (PatternLayout) | ON | ~5,500줄 |
+| 3 | Sync Console | JSON (JsonTemplateLayout) | ON | ~5,500줄 |
+| 4 | Async (Disruptor) | JSON | ON | ~5,500줄 |
 | 5 | Async (Disruptor) | JSON | OFF | 0줄 |
 
 ### 통제 변인
@@ -65,7 +65,7 @@ CloudWatch는 수집된 로그 GB당 과금되므로, 불필요한 로그가 비
 
 ## 실험 결과
 
-### 1차 실험: jdbc.resultset (요청당 ~2,500줄)
+### 1차 실험: jdbc.resultset (요청당 ~5,500줄, jdbc.resultset 기준)
 
 | Phase | 설정 요약 | TPS | avg (ms) | p95 (ms) | Baseline 대비 |
 |-------|----------|-----|----------|----------|---------------|
@@ -90,7 +90,7 @@ TPS
 
 #### 관찰
 
-- **Phase 1→2**: TPS 2,485 → 14.6으로 약 170배 감소. jdbc.resultset이 요청당 2,500+줄의 로그를 생성하면서 스레드가 I/O에 블로킹됨
+- **Phase 1→2**: TPS 2,485 → 14.6으로 약 170배 감소. jdbc.resultset이 요청당 5,500줄의 로그를 생성하면서 스레드가 I/O에 블로킹됨
 - **Phase 2→3**: TPS 14.6 → 13.5로 차이 미미 (7.5%). I/O 블로킹이 지배적인 상황에서 JSON 직렬화 비용은 측정되지 않음
 - **Phase 3→4**: TPS 13.5 → 18.3으로 약 35% 증가. 그러나 Baseline 대비 여전히 0.74%로, 로그량이 극단적인 조건에서는 Async 전환만으로는 한계가 있음
 - **Phase 4→5**: TPS 18.3 → 2,429로 Baseline의 97.7% 수준까지 회복. jdbc.resultset을 OFF 하자 로그 I/O 부하가 사라짐
@@ -135,7 +135,7 @@ TPS 2,485. 로그 I/O가 없으므로 스레드가 요청 처리에만 사용됨
 ```mermaid
 flowchart LR
     Client["k6 · 100 VUser"] -->|"요청"| T["Tomcat 워커 스레드 ⏸"]
-    T -->|"~2,500 lines/req"| PL["PatternLayout"]
+    T -->|"~5,500 lines/req"| PL["PatternLayout"]
     PL --> CA["Console Appender"]
     CA --> OSM["OutputStreamManager 🔒"]
     OSM --> SOUT["System.out"]
@@ -155,7 +155,7 @@ TPS 14.6 (Baseline 대비 0.59%). Log4j2 `OutputStreamManager`의 `synchronized`
 ```mermaid
 flowchart LR
     Client["k6 · 100 VUser"] -->|"요청"| T["Tomcat 워커 스레드"]
-    T -->|"~2,500 events"| RB["Ring Buffer ⚠️\n262,144 slots"]
+    T -->|"~5,500 events"| RB["Ring Buffer ⚠️\n262,144 slots"]
     RB -->|"dequeue"| LT["로깅 스레드"]
     LT --> JTL["JsonTemplateLayout"]
     JTL --> CA["Console Appender"]
@@ -169,7 +169,7 @@ flowchart LR
     style Client fill:#2196F3,color:#fff
 ```
 
-TPS 18.3 (Phase 2 대비 +25%, Baseline 대비 0.74%). Disruptor Ring Buffer(262,144 슬롯)가 로그 이벤트를 비동기로 처리하지만, 100 VUser × 2,500 이벤트/요청으로 큐가 포화되면 Tomcat 워커 스레드도 enqueue에서 블로킹됨.
+TPS 18.3 (Phase 2 대비 +25%, Baseline 대비 0.74%). Disruptor Ring Buffer(262,144 슬롯)가 로그 이벤트를 비동기로 처리하지만, 100 VUser × 5,500 이벤트/요청으로 큐가 포화되면 Tomcat 워커 스레드도 enqueue에서 블로킹됨.
 
 ### Phase 5: 비동기(Async) + jdbc OFF
 
@@ -200,7 +200,7 @@ flowchart TB
     P4["Phase 4 · TPS 18.3\nAsync → 큐 포화"]
     P5["Phase 5 · TPS 2,429\njdbc OFF → 병목 제거"]
 
-    P1 -->|"+2,500줄/req"| P2
+    P1 -->|"+5,500줄/req"| P2
     P2 -->|"Sync→Async"| P4
     P4 -->|"jdbc OFF"| P5
 
@@ -344,7 +344,7 @@ BLOCKED 스레드 0개. Tomcat 워커 스레드 대부분이 RUNNABLE 상태로 
 
 ### 관찰 사항
 
-1. **로그량에 따라 TPS 영향이 크게 달라졌다.** jdbc.resultset(2,500줄/req)에서는 TPS가 99.4% 감소했고, jdbc.sqltiming(1~2줄/req)에서는 21% 감소했다.
+1. **로그량에 따라 TPS 영향이 크게 달라졌다.** jdbc.resultset(5,500줄/req)에서는 TPS가 99.4% 감소했고, jdbc.sqltiming(1~2줄/req)에서는 21% 감소했다.
 
 2. **이 실험에서 GC는 병목이 아니었다.** VisualVM 프로파일링 결과, GC 활동은 모든 Phase에서 미미했다. TPS가 낮아 객체 생성률 자체가 GC를 유발할 수준에 도달하지 못했다. 스레드 덤프 분석 결과, Log4j2 `OutputStreamManager`의 `synchronized` 블록에서 Tomcat 워커 스레드들이 lock 경합으로 BLOCKED되는 것이 주된 성능 저하 요인이었다.
 

@@ -78,8 +78,8 @@ CAS(Compare-And-Swap)는 CPU 레벨의 원자적 연산으로, lock 없이 동�
 ```
 Tomcat 워커 스레드 (생산)                    로깅 스레드 (소비)
     ↓                                           ↓
- 요청당 2,500 이벤트 생성    →    Ring Buffer    →    Console에 쓰기 (느림)
- 100 VUser × 2,500 = 250,000/초              262,144 슬롯
+ 요청당 5,500 이벤트 생성    →    Ring Buffer    →    Console에 쓰기 (느림)
+ 100 VUser × 5,500 = 550,000/초              262,144 슬롯
 ```
 
 1. 100개 VUser가 동시에 요청 → 초당 수십만 로그 이벤트 생성
@@ -171,7 +171,7 @@ URL에 `log4jdbc:`를 끼워 넣으면, 모든 JDBC 호출이 DriverSpy를 거�
 | `jdbc.resultsettable` | 결과를 표 형태로 출력 | 수십 줄 |
 | `jdbc.resultset` | `ResultSet.getXxx()` 호출마다 | 수천 줄 |
 
-`jdbc.resultset`이 요청당 2,500+줄을 생성하는 이유: `ResultSet.next()` 500번 × 컬럼 5개의 `getString()`/`getLong()` = 매 호출마다 1줄씩 로그.
+`jdbc.resultset`이 요청당 약 5,500줄을 생성하는 이유: `ResultSet.next()` 500번 × 컬럼별 `getXxx()` + `wasNull()` 호출 = 매 호출마다 1줄씩 로그. 실측 결과 SELECT 500건 조회 시 jdbc.resultset 로그만 약 5,500줄이 발생했다.
 
 ### 운영 환경에서의 고려사항
 

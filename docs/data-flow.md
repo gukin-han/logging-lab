@@ -29,7 +29,7 @@ Tomcat 워커 스레드가 직접 System.out에 쓰고, 완료될 때까지 블�
 ```mermaid
 flowchart LR
     Client["k6 · 100 VUser"] -->|"요청"| T["Tomcat 워커 스레드 ⏸"]
-    T -->|"~2,500 lines/req"| PL["PatternLayout"]
+    T -->|"~5,500 lines/req"| PL["PatternLayout"]
     PL --> CA["Console Appender"]
     CA --> SOUT["System.out 🔒"]
     SOUT --> BUF["Buffer · 8KB"]
@@ -45,7 +45,7 @@ flowchart LR
 
 - `PrintStream.println()`의 `synchronized (this)` — `this`는 System.out 싱글턴
 - Tomcat 워커 스레드들이 하나의 lock을 놓고 경합 (이 실험에서는 ~120개 스레드가 활성화됨)
-- 1 요청 = ~2,500줄 → 쓰기 완료까지 수백ms 블로킹
+- 1 요청 = ~5,500줄 → 쓰기 완료까지 수백ms 블로킹
 
 TPS 14.6 (Baseline 대비 0.59%)
 
@@ -58,7 +58,7 @@ Tomcat 워커 스레드는 Disruptor Ring Buffer에 넣고 리턴. 별도 로깅
 ```mermaid
 flowchart LR
     Client["k6 · 100 VUser"] -->|"요청"| T["Tomcat 워커 스레드"]
-    T -->|"~2,500 events"| RB["Ring Buffer ⚠️\n262,144 slots"]
+    T -->|"~5,500 events"| RB["Ring Buffer ⚠️\n262,144 slots"]
     RB -->|"dequeue"| LT["로깅 스레드"]
     LT --> JTL["JsonTemplateLayout"]
     JTL --> CA["Console Appender"]
@@ -75,7 +75,7 @@ flowchart LR
 Ring Buffer 포화로 back-pressure 발생:
 
 - Disruptor Ring Buffer: 262,144 슬롯 (기본값)
-- 100 VUser × 2,500 이벤트/요청으로 수초 내 포화
+- 100 VUser × 5,500 이벤트/요청으로 수초 내 포화
 - 큐가 가득 차면 Tomcat 워커 스레드도 enqueue에서 블로킹
 - Console I/O 속도가 전체 처리량을 결정
 
@@ -103,7 +103,7 @@ flowchart LR
     style Client fill:#2196F3,color:#fff
 ```
 
-- jdbc.resultset OFF → 요청당 2,500줄 → 0줄
+- jdbc.resultset OFF → 요청당 5,500줄 → 0줄
 - Ring Buffer 여유 충분, back-pressure 없음
 - Tomcat 워커 스레드가 I/O 대기 없이 요청 처리
 
@@ -120,7 +120,7 @@ flowchart TB
     P4["Phase 4 · TPS 18.3\nAsync → 큐 포화"]
     P5["Phase 5 · TPS 2,429\njdbc OFF → 병목 제거"]
 
-    P1 -->|"+2,500줄/req"| P2
+    P1 -->|"+5,500줄/req"| P2
     P2 -->|"Sync→Async"| P4
     P4 -->|"jdbc OFF"| P5
 
