@@ -159,37 +159,34 @@ flowchart LR
     RB -->|"dequeue"| LT["로깅 스레드"]
     LT --> JTL["JsonTemplateLayout"]
     JTL --> CA["Console Appender"]
-    CA --> SOUT["System.out 🔒"]
-    SOUT --> FD["stdout fd=1"]
+    CA --> OSM["OutputStreamManager"]
+    OSM --> FD["stdout fd=1"]
     RB -.->|"큐 full → 블로킹"| T
 
     style T fill:#FF9800,color:#fff
     style RB fill:#FF5722,color:#fff
-    style SOUT fill:#FF9800,color:#fff
     style Client fill:#2196F3,color:#fff
 ```
 
-TPS 18.3 (Phase 2 대비 +25%, Baseline 대비 0.74%). Disruptor Ring Buffer(262,144 슬롯)가 로그 이벤트를 비동기로 처리하지만, 100 VUser × 5,500 이벤트/요청으로 큐가 포화되면 Tomcat 워커 스레드도 enqueue에서 블로킹됨.
+TPS 18.3 (Phase 2 대비 +25%, Baseline 대비 0.74%). 로깅 스레드 1개만 OutputStreamManager를 사용하므로 Phase 2와 달리 lock 경합은 없다. 그러나 Console I/O 속도가 느려 소비가 생산을 따라가지 못하고, Ring Buffer(262,144 슬롯)가 포화되면 Tomcat 워커 스레드가 enqueue에서 블로킹됨.
 
 ### Phase 5: 비동기(Async) + jdbc OFF
 
 ```mermaid
 flowchart LR
     Client["k6 · 100 VUser"] -->|"요청"| T["Tomcat 워커 스레드 ✅"]
-    T -->|"소량 로그"| F["jdbc OFF 🚫"]
-    F -->|"필터 통과분"| RB["Ring Buffer ✅\n262,144 slots"]
+    T -->|"소량 이벤트"| RB["Ring Buffer ✅\n262,144 slots"]
     RB --> LT["로깅 스레드"]
     LT --> JTL["JsonTemplate"]
     JTL --> CA["Console"]
     CA --> FD["stdout"]
 
     style T fill:#4CAF50,color:#fff
-    style F fill:#4CAF50,color:#fff
     style RB fill:#4CAF50,color:#fff
     style Client fill:#2196F3,color:#fff
 ```
 
-TPS 2,429 (Baseline의 97.7%). jdbc.resultset OFF로 요청당 로그가 0줄이 되면서 Ring Buffer 포화 없이 정상 처리됨.
+TPS 2,429 (Baseline의 97.7%). jdbc.resultset=OFF로 Logger 레벨 체크에서 즉시 반환되어 로그 이벤트 자체가 생성되지 않음. Ring Buffer 포화 없이 정상 처리됨.
 
 ### Phase 흐름 요약
 

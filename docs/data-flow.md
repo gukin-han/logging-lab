@@ -24,27 +24,27 @@ TPS 2,485. 로그 I/O가 없으므로 스레드가 요청 처리에만 사용됨
 
 ## Phase 2: 동기(Sync) + Console (jdbc.resultset ON)
 
-Tomcat 워커 스레드가 직접 System.out에 쓰고, 완료될 때까지 블로킹됨.
+Tomcat 워커 스레드가 직접 Console에 쓰고, OutputStreamManager의 synchronized 블록에서 블로킹됨.
 
 ```mermaid
 flowchart LR
     Client["k6 · 100 VUser"] -->|"요청"| T["Tomcat 워커 스레드 ⏸"]
     T -->|"~5,500 lines/req"| PL["PatternLayout"]
     PL --> CA["Console Appender"]
-    CA --> SOUT["System.out 🔒"]
-    SOUT --> BUF["Buffer · 8KB"]
-    BUF --> FD["stdout fd=1"]
+    CA --> OSM["OutputStreamManager 🔒"]
+    OSM --> SOUT["System.out"]
+    SOUT --> FD["stdout fd=1"]
     FD -.->|"완료 후 리턴"| T
 
     style T fill:#F44336,color:#fff
-    style SOUT fill:#FF9800,color:#fff
+    style OSM fill:#FF9800,color:#fff
     style Client fill:#2196F3,color:#fff
 ```
 
-`System.out`은 `PrintStream`의 `synchronized` 블록으로 보호된다:
+Log4j2 `OutputStreamManager`의 `synchronized` 블록에서 lock 경합이 발생한다 (스레드 덤프로 확인):
 
-- `PrintStream.println()`의 `synchronized (this)` — `this`는 System.out 싱글턴
-- Tomcat 워커 스레드들이 하나의 lock을 놓고 경합 (이 실험에서는 ~120개 스레드가 활성화됨)
+- `OutputStreamManager.writeBytes()`와 `flush()`가 `synchronized`로 보호됨
+- Tomcat 워커 스레드들이 하나의 lock을 놓고 경합
 - 1 요청 = ~5,500줄 → 쓰기 완료까지 수백ms 블로킹
 
 TPS 14.6 (Baseline 대비 0.59%)
@@ -62,22 +62,21 @@ flowchart LR
     RB -->|"dequeue"| LT["로깅 스레드"]
     LT --> JTL["JsonTemplateLayout"]
     JTL --> CA["Console Appender"]
-    CA --> SOUT["System.out 🔒"]
-    SOUT --> FD["stdout fd=1"]
+    CA --> OSM["OutputStreamManager"]
+    OSM --> FD["stdout fd=1"]
     RB -.->|"큐 full → 블로킹"| T
 
     style T fill:#FF9800,color:#fff
     style RB fill:#FF5722,color:#fff
-    style SOUT fill:#FF9800,color:#fff
     style Client fill:#2196F3,color:#fff
 ```
 
 Ring Buffer 포화로 back-pressure 발생:
 
-- Disruptor Ring Buffer: 262,144 슬롯 (기본값)
-- 100 VUser × 5,500 이벤트/요청으로 수초 내 포화
-- 큐가 가득 차면 Tomcat 워커 스레드도 enqueue에서 블로킹
-- Console I/O 속도가 전체 처리량을 결정
+- 로깅 스레드 1개만 OutputStreamManager를 사용하므로 lock 경합은 없음
+- 그러나 Console I/O 자체가 느려서 소비 속도 < 생산 속도
+- 262,144 슬롯이 수초 내 포화 → Tomcat 워커 스레드가 enqueue에서 블로킹
+- Phase 2와 병목 지점이 다름: lock 경합(Phase 2) vs 큐 포화(Phase 4)
 
 TPS 18.3 (Phase 2 대비 +25%, Baseline 대비 0.74%)
 
@@ -90,20 +89,18 @@ jdbc 로그 차단으로 로그량이 대폭 감소하여 큐 포화가 발생�
 ```mermaid
 flowchart LR
     Client["k6 · 100 VUser"] -->|"요청"| T["Tomcat 워커 스레드 ✅"]
-    T -->|"소량 로그"| F["jdbc OFF 🚫"]
-    F -->|"필터 통과분"| RB["Ring Buffer ✅\n262,144 slots"]
+    T -->|"소량 이벤트"| RB["Ring Buffer ✅\n262,144 slots"]
     RB --> LT["로깅 스레드"]
     LT --> JTL["JsonTemplate"]
     JTL --> CA["Console"]
     CA --> FD["stdout"]
 
     style T fill:#4CAF50,color:#fff
-    style F fill:#4CAF50,color:#fff
     style RB fill:#4CAF50,color:#fff
     style Client fill:#2196F3,color:#fff
 ```
 
-- jdbc.resultset OFF → 요청당 5,500줄 → 0줄
+- jdbc.resultset=OFF → Logger 레벨 체크에서 즉시 반환, 로그 이벤트 객체 자체가 생성되지 않음 (요청당 ~5,500줄 → 0줄)
 - Ring Buffer 여유 충분, back-pressure 없음
 - Tomcat 워커 스레드가 I/O 대기 없이 요청 처리
 
