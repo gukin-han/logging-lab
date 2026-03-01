@@ -197,7 +197,7 @@ TPS 14.6 (Baseline 대비 0.59%). Log4j2 `OutputStreamManager`의 `synchronized`
 ```mermaid
 flowchart LR
     Client["k6 · 100 VUser"] -->|"요청"| T["Tomcat 워커 스레드"]
-    T -->|"~5,500 events"| RB["Ring Buffer ⚠️\n262,144 slots"]
+    T -->|"~5,500 events"| RB["Ring Buffer ⚠️<br/>262,144 slots"]
     RB -->|"dequeue"| LT["로깅 스레드"]
     LT --> JTL["JsonTemplateLayout"]
     JTL --> CA["Console Appender"]
@@ -217,7 +217,7 @@ TPS 18.3 (Phase 2 대비 +25%, Baseline 대비 0.74%). 로깅 스레드 1개만 
 ```mermaid
 flowchart LR
     Client["k6 · 100 VUser"] -->|"요청"| T["Tomcat 워커 스레드 ✅"]
-    T -->|"소량 이벤트"| RB["Ring Buffer ✅\n262,144 slots"]
+    T -->|"소량 이벤트"| RB["Ring Buffer ✅<br/>262,144 slots"]
     RB --> LT["로깅 스레드"]
     LT --> JTL["JsonTemplate"]
     JTL --> CA["Console"]
@@ -234,10 +234,10 @@ TPS 2,429 (Baseline의 97.7%). jdbc.resultset=OFF로 Logger 레벨 체크에서 
 
 ```mermaid
 flowchart TB
-    P1["Phase 1 · TPS 2,485\n로그 없음"]
-    P2["Phase 2 · TPS 14.6\nSync → 스레드 블로킹"]
-    P4["Phase 4 · TPS 18.3\nAsync → 큐 포화"]
-    P5["Phase 5 · TPS 2,429\njdbc OFF → 병목 제거"]
+    P1["Phase 1 · TPS 2,485<br/>로그 없음"]
+    P2["Phase 2 · TPS 14.6<br/>Sync → 스레드 블로킹"]
+    P4["Phase 4 · TPS 18.3<br/>Async → 큐 포화"]
+    P5["Phase 5 · TPS 2,429<br/>jdbc OFF → 병목 제거"]
 
     P1 -->|"+5,500줄/req"| P2
     P2 -->|"Sync→Async"| P4
@@ -402,7 +402,6 @@ logging-lab/
 │   ├── experiment-results.md     # 상세 실험 결과
 │   ├── data-flow.md              # 데이터 플로우 다이어그램
 │   ├── concepts.md               # 핵심 개념 정리
-│   ├── jdbc-proxy.md             # JDBC 아키텍처와 log4jdbc 프록시 패턴
 │   ├── thread-dump-phase2.txt    # Phase 2 스레드 덤프 (k6 부하 중 캡처)
 │   ├── thread-dump-phase5.txt    # Phase 5 스레드 덤프 (k6 부하 중 캡처)
 │   └── images/                   # VisualVM 스크린샷
