@@ -55,6 +55,48 @@ CloudWatch는 수집된 로그 GB당 과금되므로, 불필요한 로그가 비
 | 4 | Async (Disruptor) | JSON | ON | ~5,500줄 |
 | 5 | Async (Disruptor) | JSON | OFF | 0줄 |
 
+### log4jdbc 로거별 출력
+
+log4jdbc는 JDBC 드라이버를 프록시로 래핑하여 SQL 실행을 로깅한다. 로거 종류에 따라 같은 쿼리에 대해 출력되는 로그의 형태와 양이 다르다.
+
+**jdbc.sqltiming** — SQL문과 실행 시간. 요청당 1~2줄.
+
+```
+jdbc.sqltiming - SELECT d.id, d.name, d.email, d.department, d.salary FROM dummy_entity d {executed in 3 msec}
+```
+
+**jdbc.resultset** — `ResultSet.getXxx()` 호출을 하나하나 기록. 요청당 ~5,500줄.
+
+```
+jdbc.resultset - ResultSet.next() returned true
+jdbc.resultset - ResultSet.getLong(id) returned 1
+jdbc.resultset - ResultSet.getString(name) returned "user_1"
+jdbc.resultset - ResultSet.wasNull() returned false
+jdbc.resultset - ResultSet.getString(email) returned "user_1@test.com"
+jdbc.resultset - ResultSet.wasNull() returned false
+... (500건 × 행당 약 11줄 = ~5,500줄)
+```
+
+같은 SELECT 결과를 JDBC API 호출 단위로 풀어쓴 것이므로 사람이 읽는 용도가 아니다. 500건 조회 시 `next()` 500번 × 컬럼별 `getXxx()` + `wasNull()` 호출이 각각 1줄씩 기록된다.
+
+### Text vs JSON 포맷 차이
+
+같은 로그 이벤트에 대해 포맷만 다르다.
+
+**Text (PatternLayout)** — Phase 2:
+
+```
+2026-02-20 14:32:15.123 DEBUG [http-nio-exec-1] jdbc.resultset - ResultSet.next() returned true
+```
+
+**JSON (JsonTemplateLayout)** — Phase 3:
+
+```json
+{"@timestamp":"2026-02-20T14:32:15.123Z","log.level":"DEBUG","message":"ResultSet.next() returned true","log.logger":"jdbc.resultset","process.thread.name":"http-nio-exec-1"}
+```
+
+JSON은 구조화된 필드를 key-value로 직렬화하므로 문자열이 더 길고, 직렬화 연산이 추가된다. 그러나 실험 결과 Text(14.6 TPS) vs JSON(13.5 TPS)으로 차이가 7.5%에 불과했다. I/O 블로킹이 수백ms인 상황에서 직렬화 비용(마이크로초 단위)은 전체 비용에서 비중이 미미했다.
+
 ### 통제 변인
 
 - H2 In-Memory DB 사용으로 네트워크/디스크 I/O 변수 제거
@@ -360,6 +402,7 @@ logging-lab/
 │   ├── experiment-results.md     # 상세 실험 결과
 │   ├── data-flow.md              # 데이터 플로우 다이어그램
 │   ├── concepts.md               # 핵심 개념 정리
+│   ├── jdbc-proxy.md             # JDBC 아키텍처와 log4jdbc 프록시 패턴
 │   ├── thread-dump-phase2.txt    # Phase 2 스레드 덤프 (k6 부하 중 캡처)
 │   ├── thread-dump-phase5.txt    # Phase 5 스레드 덤프 (k6 부하 중 캡처)
 │   └── images/                   # VisualVM 스크린샷
